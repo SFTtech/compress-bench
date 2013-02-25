@@ -1,0 +1,100 @@
+System information: Phenom II X4 processor, 4GB RAM
+Benchmark information: Both srcfile and destfile were stored in a ramdisk
+src was a 300-MB tar file which contained the /usr/bin folder of a typical XUbuntu installation.
+
+Measurement results for compression utilities
+
+Compressor | Percentage | Compression rate | Decompression rate 
+           |            |                  |                    
+cat        |  0.00      | 912.6 MB/s       | 1.123 GB/s         
+gzip       | 62.11      | 15.28 MB/s       | 106.5 MB/s         
+lzma -1    | 67.89      | 10.71 MB/s       | 36.52 MB/s         
+lzma -2    | 69.39      | 7.127 MB/s       | 39.51 MB/s         
+lzma -3    | 71.11      | 2.108 MB/s       | 39.76 MB/s         
+lzma -4    | 71.57      | 1.965 MB/s       | 40.69 MB/s         
+lzma -5    | 72.03      | 1.718 MB/s       | 41.48 MB/s         
+lzma -6    | 72.38      | 1.622 MB/s       | 41.96 MB/s         
+lzma -7    | 73.13      | 1.505 MB/s       | 42.86 MB/s         
+lzma -8    | 75.62      | 1.291 MB/s       | 46.91 MB/s         
+lzma -9    | 76.60      | 1.200 MB/s       | 48.46 MB/s         
+xz -1      | 69.09      | 7.493 MB/s       | 33.53 MB/s         
+xz -2      | 69.74      | 5.583 MB/s       | 34.65 MB/s         
+xz -3      | 70.09      | 3.986 MB/s       | 35.07 MB/s         
+xz -4      | 71.79      | 2.208 MB/s       | 35.76 MB/s         
+xz -5      | 73.00      | 1.726 MB/s       | 36.65 MB/s         
+xz -6      | 73.12      | 1.550 MB/s       | 36.80 MB/s         
+xz -7      | 75.66      | 1.470 MB/s       | 40.38 MB/s         
+xz -8      | 76.63      | 1.368 MB/s       | 41.62 MB/s         
+xz -9      | 77.78      | 1.264 MB/s       | 43.57 MB/s         
+lzop -2    | 47.45      | 194.6 MB/s       | 279.5 MB/s         
+lzop -3    | 47.45      | 194.1 MB/s       | 281.3 MB/s         
+lzop -4    | 47.45      | 195.8 MB/s       | 286.1 MB/s         
+lzop -5    | 47.45      | 198.0 MB/s       | 288.0 MB/s         
+lzop -6    | 47.45      | 196.8 MB/s       | 287.1 MB/s         
+lzop -7    | 58.34      | 8.324 MB/s       | 268.4 MB/s         
+lzop -8    | 58.62      | 3.333 MB/s       | 268.9 MB/s         
+lzop -9    | 58.64      | 2.546 MB/s       | 270.5 MB/s         
+
+Compression utilities that are worse than some other in all aspects, i.e. completely useless for this workload
+
+Compressor | Percentage | Compression rate | Decompression rate | Outdone by 
+           |            |                  |                    |            
+compress   | 34.38      | 23.11 MB/s       | 108.1 MB/s         | lzop -6    
+bzip2 -1   | 63.55      | 7.495 MB/s       | 22.79 MB/s         | lzma -1    
+bzip2 -2   | 64.03      | 7.552 MB/s       | 22.17 MB/s         | lzma -1    
+bzip2 -3   | 64.24      | 7.289 MB/s       | 21.70 MB/s         | xz -1      
+bzip2 -4   | 64.29      | 7.096 MB/s       | 21.46 MB/s         | xz -1      
+bzip2 -5   | 64.42      | 6.789 MB/s       | 21.16 MB/s         | xz -1      
+bzip2 -6   | 64.42      | 6.543 MB/s       | 20.75 MB/s         | xz -1      
+bzip2 -7   | 64.44      | 6.264 MB/s       | 20.50 MB/s         | xz -1      
+bzip2 -8   | 64.47      | 6.061 MB/s       | 20.19 MB/s         | xz -1      
+bzip2 -9   | 64.51      | 5.906 MB/s       | 19.97 MB/s         | xz -1      
+xz -e -1   | 71.52      | 1.587 MB/s       | 34.97 MB/s         | xz -5      
+xz -e -2   | 71.99      | 1.497 MB/s       | 35.69 MB/s         | xz -6      
+xz -e -3   | 72.36      | 1.481 MB/s       | 36.20 MB/s         | xz -6      
+xz -e -4   | 72.34      | 1.415 MB/s       | 36.05 MB/s         | xz -e -3   
+xz -e -5   | 73.10      | 1.384 MB/s       | 36.95 MB/s         | xz -7      
+xz -e -6   | 73.09      | 1.309 MB/s       | 36.95 MB/s         | xz -e -5   
+xz -e -7   | 75.62      | 1.206 MB/s       | 40.42 MB/s         | xz -9      
+xz -e -8   | 76.61      | 1.121 MB/s       | 41.68 MB/s         | xz -9      
+xz -e -9   | 77.75      | 1.031 MB/s       | 43.30 MB/s         | xz -9      
+lzop -1    | 47.13      | 196.4 MB/s       | 285.2 MB/s         | lzop -6    
+
+Best compression utility depending on transmission speed and mode
+PAR:    Compression, Transmission and Decompression occur parallel (e.g. via netcat)
+SEQ(k): The file is first compressed, then transmitted k times, then decompressed (e.g. via http)
+
+Data rate     | PAR     | SEQ (1) | SEQ (2) | SEQ (5) 
+              |         |         |         |         
+>= 0.000  B/s | xz -9   | xz -9   | xz -9   | xz -9   
+>= 129.4 KB/s | xz -9   | lzma -2 | xz -9   | xz -9   
+>= 258.8 KB/s | xz -9   | lzma -2 | lzma -2 | xz -9   
+>= 295.3 KB/s | xz -8   | lzma -2 | lzma -2 | xz -9   
+>= 332.9 KB/s | xz -7   | lzma -2 | lzma -2 | xz -9   
+>= 333.9 KB/s | xz -7   | lzma -1 | lzma -2 | xz -9   
+>= 395.1 KB/s | lzma -7 | lzma -1 | lzma -2 | xz -9   
+>= 404.6 KB/s | xz -6   | lzma -1 | lzma -2 | xz -9   
+>= 418.7 KB/s | xz -5   | lzma -1 | lzma -2 | xz -9   
+>= 486.9 KB/s | xz -4   | lzma -1 | lzma -2 | xz -9   
+>= 647.1 KB/s | xz -4   | lzma -1 | lzma -2 | lzma -2 
+>= 660.6 KB/s | xz -3   | lzma -1 | lzma -2 | lzma -2 
+>= 667.8 KB/s | xz -3   | lzma -1 | lzma -1 | lzma -2 
+>= 1.206 MB/s | xz -2   | lzma -1 | lzma -1 | lzma -2 
+>= 1.260 MB/s | xz -2   | gzip    | lzma -1 | lzma -2 
+>= 1.669 MB/s | xz -2   | gzip    | lzma -1 | lzma -1 
+>= 1.709 MB/s | lzma -2 | gzip    | lzma -1 | lzma -1 
+>= 2.203 MB/s | xz -1   | gzip    | lzma -1 | lzma -1 
+>= 2.211 MB/s | xz -1   | lzop -5 | lzma -1 | lzma -1 
+>= 2.406 MB/s | lzma -1 | lzop -5 | lzma -1 | lzma -1 
+>= 2.519 MB/s | lzma -1 | lzop -5 | gzip    | lzma -1 
+>= 4.060 MB/s | gzip    | lzop -5 | gzip    | lzma -1 
+>= 4.422 MB/s | gzip    | lzop -5 | lzop -5 | lzma -1 
+>= 6.298 MB/s | gzip    | lzop -5 | lzop -5 | gzip    
+>= 8.030 MB/s | lzop -2 | lzop -5 | lzop -5 | gzip    
+>= 11.05 MB/s | lzop -2 | lzop -5 | lzop -5 | lzop -5 
+>= 72.58 MB/s | lzop -2 | cat     | lzop -5 | lzop -5 
+>= 102.3 MB/s | lzop -4 | cat     | lzop -5 | lzop -5 
+>= 102.9 MB/s | lzop -5 | cat     | lzop -5 | lzop -5 
+>= 145.2 MB/s | lzop -5 | cat     | cat     | lzop -5 
+>= 198.0 MB/s | cat     | cat     | cat     | lzop -5 
+>= 362.9 MB/s | cat     | cat     | cat     | cat       
