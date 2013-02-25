@@ -1,0 +1,380 @@
+#!/usr/bin/python3
+#[sft] ultimate compression debate resolver
+import os
+import sys
+import ctypes
+import collections
+
+#code for monotonic clock...
+__all__ = ["monotonic_time"]
+CLOCK_MONOTONIC = 1 # see <linux/time.h>
+class timespec(ctypes.Structure):
+    _fields_ = [
+        ('tv_sec', ctypes.c_long),
+        ('tv_nsec', ctypes.c_long)
+    ]
+librt = ctypes.CDLL('librt.so.1', use_errno=True)
+clock_gettime = librt.clock_gettime
+clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
+def monotonic_time():
+    t = timespec()
+    if clock_gettime(CLOCK_MONOTONIC, ctypes.pointer(t)) != 0:
+        errno_ = ctypes.get_errno()
+        raise OSError(errno_, os.strerror(errno_))
+    return t.tv_sec + t.tv_nsec * 1e-9
+#end monotonic clock code
+
+#compose list of compressors
+compressors=[("cat", "cat"), "compress", "gzip"]
+for comp in ["bzip2", "lzma", "xz", "xz -e", "lzop"]:
+	for x in range(1, 10):
+		compressors.append(comp + " -" + str(x))
+
+#parse argv
+if len(sys.argv) != 3:
+	print("invocation: " + sys.argv[0] + " [fromfile] [tofile]\n\nNote that fromfile should be representative data, and that fromfile and tofile should be on fast, different discs (or even ramdisks).")
+	sys.exit(1)
+
+fromfile=sys.argv[1]
+tofile=sys.argv[2]
+
+#get size of fromfile
+oldsize = os.path.getsize(fromfile)
+
+def invoke(command):
+	print(command)
+	t_begin = monotonic_time()
+	if os.system(command) != 0:
+		print("command failed")
+		exit(2)
+	t_end = monotonic_time()
+	return t_end - t_begin
+
+class datarate():
+	def __init__(self, dr):
+		self.dr = dr
+
+	def __repr__(self):
+		def fourdigits(x):
+			if x < 10:
+				return '{:5.3f}'.format(x)
+			elif x < 100:
+				return '{:5.2f}'.format(x)
+			elif x < 1000:
+				return '{:5.1f}'.format(x)
+			else:
+				return '{:5.0f}'.format(x)
+
+		if self.dr < 1000:
+			return fourdigits(self.dr) + "  B/s"
+		elif self.dr < 1000000:
+			return fourdigits(self.dr/1000) + " KB/s"
+		elif self.dr < 1000000000:
+			return fourdigits(self.dr/1000000) + " MB/s"
+		else:
+			return fourdigits(self.dr/1000000000) + " GB/s"
+
+class percentage():
+	def __init__(self, pc):
+		self.pc = pc
+
+	def __repr__(self):
+		return '{:5.2f}'.format(self.pc)
+
+class compresult:
+	def kvpairs(self):
+		yield ("Compressor", self.comp)
+		yield ("Percentage", percentage(self.percentage))
+		yield ("Compression rate", datarate(self.crate))
+		yield ("Decompression rate", datarate(self.drate))
+		yield ("Outdone by", self.outdoneby)
+
+	def __repr__(self):
+		maxlen = 0
+		kvpairs = []
+		for k, v in self.kvpairs():
+			if len(str(k)) > maxlen:
+				maxlen = len(str(k))
+			kvpairs.append((k, v))
+
+		result = ""
+		for k, v in kvpairs:
+			result += str(k).ljust(maxlen + 2) + str(v) + "\n"
+
+		return result[:-1]
+
+	def time_par(self, rate):
+		return max(self.cdmaxtime, self.size / rate)
+
+	def time_seq(self, rate, k):
+		return self.ctime + self.dtime + k * self.size / rate
+
+	def compare(self, other):
+		if self.size < other.size and self.ctime < other.ctime and self.dtime < other.dtime:
+			#self is better than other in all aspects
+			return 1
+		
+		if self.size > other.size and self.ctime > other.ctime and self.dtime > other.dtime:
+			#self is worse than other in all aspects
+			return -1
+		
+		#uncomparable
+		return 0
+			
+
+def dobench(compressors, fromfile, tofile):
+	for comp in compressors:
+		if type(comp) == tuple:
+			decomp = comp[1]
+			comp = comp[0]
+		else:
+			decomp = comp + " -d"
+
+		res = compresult()
+		res.comp = comp
+		res.ctime = invoke("pv '" + fromfile + "' | " + comp + " > '" + tofile + "'")
+		res.dtime = invoke("pv '" + tofile + "' | " + decomp + " > /dev/null")
+		res.cdmaxtime = res.ctime
+		if res.dtime > res.ctime:
+			res.cdmaxtime = res.ctime
+		res.size = os.path.getsize(tofile)
+		res.diff = oldsize - res.size
+		diffrate = res.diff / (res.ctime + res.dtime)
+		res.crate = oldsize / res.ctime
+		res.drate = oldsize / res.dtime
+		res.ecorate_seq1 = diffrate
+		res.ecorate_seq2 = diffrate/2
+		res.ecorate_par = oldsize / res.cdmaxtime
+		res.percentage = 100 * res.diff / oldsize
+		res.outdoneby = None
+		yield res
+
+results = []
+for res in dobench(compressors, fromfile, tofile):
+	for otherres in results:
+		comp = res.compare(otherres)
+		if comp < 0:
+			#res is worse than otherres in all aspects
+			res.outdoneby = otherres.comp
+		elif comp > 0:	
+			#res is better than otherres in all aspects
+			otherres.outdoneby = res.comp
+		if res.diff < 0:
+			#res has negative compression rate
+			res.outdoneby = "No compression"
+	results.append(res)
+	#print res immediately, for the impatient users
+	print(res)
+
+#put all list elements that are outdone by an other to the end
+goodresults = []
+badresults = []
+for res in results:
+	if res.outdoneby == None:
+		goodresults.append(res)
+	else:
+		badresults.append(res)
+results = goodresults
+results.extend(badresults)
+
+#takes a list of unsorted points, and returns a yields interval tuples in a sorted order.
+#the interval tuples consist of (start, middle, end).
+#the last interval tuple will be (start, +inf, +inf).
+def list_to_intervals(l):
+	lastpoint = None
+	for point in sorted(l) + [float("inf")]:
+		if lastpoint == point:
+			continue
+		if lastpoint != None:
+			yield (lastpoint, (point + lastpoint)/2, point)
+		lastpoint = point
+
+#find the transmission rates at which all of the compression algorithms are optimal for PARALLEL transmission.
+#we want to optimize for minimum time, i.e. maximum 1/t
+#the time is t(rate) = max(t_transmission(rate), res.cdmaxtime) = max(res.size/rate, res.cdmaxtime)
+#when plotting the 1/t(rate) curves for all results against rate, we need to find the curve that is highest
+#those curves switch only at places where intersections occur, and only saturated and non-saturated curves can intersect
+#we need to find the comp with the highest rate, as optimal algorithm for rate = 0 (special case)
+curmax = results[0]
+for r in results:
+	if(r.size < curmax.size):
+		curmax = r
+#we generate a result list that has (rate, best_comp) tuples
+bestcomp_par = [(0, curmax)]
+
+#generate the (O(n²), yes, I'm lazy, linesweep would be much more efficient) list of intersection points
+intersections = []
+for r0 in results:
+	for r1 in results:
+		#there can be two intersections: saturated part of r0 with slope of r1 or the other way round.
+		#simply add both, additional points do not falsify our data, and it's not worth the effort (constant factor :P)
+
+		#the intersection points are at 1/r0.cdmaxtime = rate/r1.size and at 1/r1.cdmaxtime = rate/r0.size
+		intersections.append(r1.size/r0.cdmaxtime)
+		intersections.append(r0.size/r1.cdmaxtime)
+
+#I am indeed lazy as fuck, as this is an O(n³) algorithm even though O(nlogn) would be possible.
+for rate_begin, rate_middle, rate_end in list_to_intervals(intersections):
+	#ignore negative intersections
+	if rate_begin < 0:
+		continue
+	oldmax = curmax
+	curmax = results[0]
+	for r in results:
+		#check whether r is better than curmax
+		if r.time_par(rate_middle) < curmax.time_par(rate_middle):
+			curmax = r
+	if curmax != oldmax:
+		bestcomp_par.append((rate_begin, curmax))
+
+#find the transmission rates at which all of the compression algorithms are optimal for SEQUENTIAL k-fold transmission
+#the transmission time is t(rate, k) = k * t_transmission(rate) + res.ctime + res.dtime = k * res.size/rate + res.ctime + res.dtime
+#we need find the curve with the minimum t, and for that, again, we need intersections.
+#also again, we need to find the result with the highest compression as optimal comp for rate = 0
+curmax = results[0]
+for r in results:
+	if(r.size < curmax.size):
+		curmax = r
+#we generate result lists for different values of k that have (rate, best_comp) tuples
+bestcomp_seq = {}
+bestcomp_seq_ks = [1, 2, 5]
+for k in bestcomp_seq_ks:
+	bestcomp_seq[k] = [(0, curmax)]
+
+#for each value of k, find optimal comps for all rates
+for k in bestcomp_seq_ks:
+	#first, again, find the O(n²) intersection points
+	intersections = []
+	for r0 in results:
+		for r1 in results:
+			comptimediff = r1.ctime + r1.dtime - r0.ctime - r0.dtime
+			sizediff = r0.size - r1.size
+
+			#we only have an intersection if the times differ by more than 0.01 percent.
+			#else, the intersection would be close to infinity, and thus irrelevant.
+			if(abs(comptimediff) > 0.0001 * (r1.ctime + r1.dtime)):
+				intersections.append(k * sizediff / comptimediff)
+
+	#then, again, find minimum curves for each intersection point
+	curmax = bestcomp_seq[k][0][1]
+	for rate_begin, rate_middle, rate_end in list_to_intervals(intersections):
+		#ignore negative intersections
+		if rate_begin < 0:
+			continue
+		oldmax = curmax
+		curmax = results[0]
+		for r in results:
+			#check whether r is better than curmax
+			if r.time_seq(rate_middle, k) < curmax.time_seq(rate_middle, k):
+				curmax = r
+		if curmax != oldmax:
+			bestcomp_seq[k].append((rate_begin, curmax))
+
+class resulttable:
+	def __init__(self):
+		self.data = {}
+		self.rows = collections.OrderedDict()
+		self.cols = collections.OrderedDict()
+
+	def insval(self, row, col, v):
+		if v == None:
+			return
+
+		#update column and row indices with their maximum field size values
+		if not row in self.rows:
+			self.rows[row] = max(len(str(row)), len(str(v)))
+			self.data[row] = collections.OrderedDict()
+		else:
+			self.rows[row] = max(self.rows[row], len(str(v)))
+
+		if not col in self.cols:
+			self.cols[col] = max(len(str(col)), len(str(v)))
+		else:
+			self.cols[col] = max(self.cols[col], len(str(v)))
+
+		#store the value
+		self.data[row][col] = v
+
+	def getval(self, row, col):
+		if not row in self.rows or not col in self.data[row]:
+			return None
+		else:
+			return self.data[row][col]
+
+	def getvalstr(self, row, col):
+		if not col in self.cols:
+			width = 0
+		else:
+			width = self.cols[col]
+
+		return str(self.getval(row, col)).ljust(width)
+
+	def printtitle(self):
+		line = ""
+		for col in self.cols:
+			line += str(col).ljust(self.cols[col]) + " | "
+		print(line[:-2])
+
+	def printempty(self):
+		line = ""
+		for col in self.cols:
+			line += "".ljust(self.cols[col]) + " | "
+		print(line[:-2])
+
+	def printbody(self):
+		for row in self.rows:
+			line = ""
+			for col in self.cols:
+				line += self.getvalstr(row, col) + " | "
+			print(line[:-2])
+
+	def printfull(self, desc):
+		print(desc + "\n")
+		self.printtitle()
+		self.printempty()
+		self.printbody()
+
+#create table for measurement results
+goodtable = resulttable()
+badtable = resulttable()
+for res in results:
+	if(res.outdoneby == None):
+		table = goodtable
+	else:
+		table = badtable
+	#insert res into the table
+	for k, v in res.kvpairs():
+		table.insval(res.comp, k, v)
+#and print it
+goodtable.printfull("Measurement results for compression utilities")
+badtable.printfull("\nCompression utilities that are worse than some other in all aspects, i.e. completely useless for this workload")
+
+#create table for optimal comps for datarates
+table = resulttable()
+#get all datarate intervals
+all_points = bestcomp_par
+for k in bestcomp_seq_ks:
+	all_points = all_points + bestcomp_seq[k]
+
+lastinserted = None
+for begin, middle, end in list_to_intervals(map(lambda x: x[0], all_points)):
+	#get the optimal values for bestcomp_par and bestcomp_seq[k]
+	def find_matching(l, pos):
+		for k, v in reversed(l):
+			if k <= pos:
+				return v.comp
+
+	#only insert a new tuple if any of the values have changed, else it would not make sense to add an other row
+	inslist = [("PAR", find_matching(bestcomp_par, middle))]
+	inslist += map(lambda k: ("SEQ (" + str(k) + ")", find_matching(bestcomp_seq[k], middle)), bestcomp_seq_ks)
+
+	if(inslist != lastinserted):
+		table.insval(begin, "Data rate", ">= " + str(datarate(begin)))
+		for k, v in inslist:
+			table.insval(begin, k, v)
+	lastinserted = inslist
+
+#and print it
+table.printfull("\nBest compression utility depending on transmission speed and mode\n"
+	"PAR:    Compression, Transmission and Decompression occur parallel (e.g. via netcat)\n"
+	"SEQ(k): The file is first compressed, then transmitted k times, then decompressed (e.g. via http)")
