@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-#[sft] ultimate compression debate resolver
+#SFT-Tech ultimate compression utility debate resolver
 #
 #(c) 2013	Michael Enßlin	(michael@ensslin.cc)
 #
@@ -7,10 +7,11 @@
 
 import os
 import sys
-import ctypes
 import collections
+import argparse
 
 #code for monotonic clock...
+import ctypes
 __all__ = ["monotonic_time"]
 CLOCK_MONOTONIC = 1 # see <linux/time.h>
 class timespec(ctypes.Structure):
@@ -29,44 +30,57 @@ def monotonic_time():
     return t.tv_sec + t.tv_nsec * 1e-9
 #end monotonic clock code
 
-#compose list of compressors
-compressors=[("cat", "cat"), "compress", "gzip"]
-for comp in ["bzip2", "lzma", "xz", "xz -e", "lzop"]:
-	for x in range(1, 10):
-		compressors.append(comp + " -" + str(x))
-
 #parse argv
-if len(sys.argv) != 3:
-	print("invocation: " + sys.argv[0] + " [fromfile] [tofile]\n\nNote that fromfile should be representative data, and that fromfile and tofile should be on fast, different discs (or even ramdisks).")
-	sys.exit(1)
+parser = argparse.ArgumentParser(description='Compression utility benchmark')
+parser.add_argument("source", help="this file is used as input for benchmarking, and should contain representative data")
+parser.add_argument("dest", help="compressed data is written here, the file must not exist, but the directory must be writable")
+parser.add_argument("util", help="compression utility that should be benchmarked (may include arguments such as -1)", nargs='*')
+parser.add_argument("--utils", help="multiple compression utilities, comma separated, as python expressions (will be evaled)")
+parser.add_argument("--defaultutils", help="Enforce using the default utils, in addition to the manually specified ones", action="store_true", default=False)
+parser.add_argument("--csv", help="Store the tables in .csv files in the current working directory", action="store_true", default=False)
+args = parser.parse_args()
+sourcefile = os.path.abspath(args.source)
+destfile = os.path.abspath(args.dest)
 
-fromfile=sys.argv[1]
-tofile=sys.argv[2]
+compressors = []
+if len(args.util) > 0:
+	compressors += args.util
+if args.utils != None:
+	compressors += eval("[" + args.utils + "]")
+if len(compressors) == 0 or args.defaultutils:
+	#compose list of compressors
+	compressors += [("cat", "cat"), "compress"]
+	for comp in ["lzop", "gzip", "bzip2", "lzma", "xz", "xz -e"]:
+		for x in range(1, 10):
+			compressors.append(comp + " -" + str(x))
 
-#check fromfile and tofile
-#fromfile must be a file
-if not os.path.isfile(fromfile):
-	print("Fromfile " + fromfile + " is not a file")
-	if os.path.isdir(fromfile):
+#check sourcefile and destfile
+#sourcefile must be a file
+if not os.path.isfile(sourcefile):
+	print(sourcefile + " is not a file")
+	if os.path.isdir(sourcefile):
 		print("If you wish to benchmark with the content of a directory, run it through tar -c first.")
 	sys.exit(1)
 
-#tofile must be in a writable directory
-todir = os.path.dirname(tofile)
-if not os.path.isdir(todir):
-	print("Tofile must be in an existing directory")
+#destfile must be in a writable directory
+destdir = os.path.dirname(destfile)
+if not os.path.isdir(destdir):
+	print("Destination file must be in an existing directory")
 	sys.exit(1)
 
-if not os.access(todir, os.W_OK):
-	print("The directory " + todir + " is not writable")
+if not os.access(destdir, os.W_OK):
+	print(destdir + " is not writable")
 	sys.exit(1)
 
-if os.path.isfile(tofile) and not os.access(tofile, os.W_OK):
-	print("The file " + tofile + " is not writable")
+if os.path.isfile(destfile) and not os.access(destfile, os.W_OK):
+	print(destfile + " is not writable")
 	sys.exit(1)
 
-#get size of fromfile
-oldsize = os.path.getsize(fromfile)
+#get size of sourcefile
+oldsize = os.path.getsize(sourcefile)
+if oldsize == 0:
+	print("Source file must be non-zero sized")
+	sys.exit(1)
 
 def invoke(command):
 	print(command)
@@ -149,7 +163,7 @@ class compresult:
 		return 0
 			
 
-def dobench(compressors, fromfile, tofile):
+def dobench(compressors, sourcefile, destfile):
 	for comp in compressors:
 		if type(comp) == tuple:
 			decomp = comp[1]
@@ -159,12 +173,12 @@ def dobench(compressors, fromfile, tofile):
 
 		res = compresult()
 		res.comp = comp
-		res.ctime = invoke("pv '" + fromfile + "' | " + comp + " > '" + tofile + "'")
-		res.dtime = invoke("pv '" + tofile + "' | " + decomp + " > /dev/null")
+		res.ctime = invoke("pv '" + sourcefile + "' | " + comp + " > '" + destfile + "'")
+		res.dtime = invoke("pv '" + destfile + "' | " + decomp + " > /dev/null")
 		res.cdmaxtime = res.ctime
 		if res.dtime > res.ctime:
 			res.cdmaxtime = res.ctime
-		res.size = os.path.getsize(tofile)
+		res.size = os.path.getsize(destfile)
 		res.diff = oldsize - res.size
 		diffrate = res.diff / (res.ctime + res.dtime)
 		res.crate = oldsize / res.ctime
@@ -177,7 +191,7 @@ def dobench(compressors, fromfile, tofile):
 		yield res
 
 results = []
-for res in dobench(compressors, fromfile, tofile):
+for res in dobench(compressors, sourcefile, destfile):
 	for otherres in results:
 		comp = res.compare(otherres)
 		if comp < 0:
@@ -336,30 +350,41 @@ class resulttable:
 
 		return str(self.getval(row, col)).ljust(width)
 
-	def printtitle(self):
+	def getline(self, source, sep, padding):
 		line = ""
 		for col in self.cols:
-			line += str(col).ljust(self.cols[col]) + " | "
-		print(line[:-2])
+			data = str(source(col))
+			if padding:
+				line += data.ljust(self.cols[col])
+			else:
+				line += data
+			line += sep
 
-	def printempty(self):
-		line = ""
-		for col in self.cols:
-			line += "".ljust(self.cols[col]) + " | "
-		print(line[:-2])
+		return line[:-len(sep)]
 
-	def printbody(self):
+	def gettitle(self, sep = " | ", padding = True):
+		return self.getline(lambda x: x, sep, padding)
+
+	def getempty(self, sep = " | ", padding = True):
+		return self.getline(lambda x: "", sep, padding)
+
+	def getbody(self, sep = " | ", padding = True):
+		body = ""
 		for row in self.rows:
-			line = ""
-			for col in self.cols:
-				line += self.getvalstr(row, col) + " | "
-			print(line[:-2])
+			body += self.getline(lambda x: self.getvalstr(row, x), sep, padding) + "\n"
+		return body[:-1]
 
 	def printfull(self, desc):
 		print(desc + "\n")
-		self.printtitle()
-		self.printempty()
-		self.printbody()
+		print(self.gettitle())
+		print(self.getempty())
+		print(self.getbody())
+	
+	def to_csv(self, filename):
+		f = open(filename, 'w')
+		f.write(self.gettitle(",") + "\n")
+		f.write(self.getbody(",") + "\n")
+		f.close()
 
 #create table for measurement results
 goodtable = resulttable()
@@ -375,6 +400,9 @@ for res in results:
 #and print it
 goodtable.printfull("Measurement results for compression utilities")
 badtable.printfull("\nCompression utilities that are worse than some other in all aspects, i.e. completely useless for this workload")
+if args.csv:
+	goodtable.to_csv("comp-measurements.csv")
+	badtable.to_csv("comp-measurements-outdone.csv")
 
 #create table for optimal comps for datarates
 table = resulttable()
@@ -382,6 +410,7 @@ table = resulttable()
 all_points = bestcomp_par
 for k in bestcomp_seq_ks:
 	all_points = all_points + bestcomp_seq[k]
+
 
 lastinserted = None
 for begin, middle, end in list_to_intervals(map(lambda x: x[0], all_points)):
@@ -405,3 +434,5 @@ for begin, middle, end in list_to_intervals(map(lambda x: x[0], all_points)):
 table.printfull("\nBest compression utility depending on transmission speed and mode\n"
 	"PAR:    Compression, Transmission and Decompression occur parallel (e.g. via netcat)\n"
 	"SEQ(k): The file is first compressed, then transmitted k times, then decompressed (e.g. via http)")
+if args.csv:
+	table.to_csv("best-comp.csv")

@@ -2,7 +2,7 @@ Since this program tests all kinds of compression utilities, it also depends on 
 
 List of utilities:
 
-compress	(package name is usually 'mcompress')
+compress	(package name is usually 'ncompress')
 gzip
 bzip2
 xz
