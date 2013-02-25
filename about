@@ -8,6 +8,9 @@ bzip2
 xz
 lzma
 lzop
+zpipe
+
+If one of the utilities is not available, the other tests will still run.
 
 Since it is written in python3, it obviously requires python3
 There is also a dependency on pipe viewer (pv), to display progress during benchmark runs
