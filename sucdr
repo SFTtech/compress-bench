@@ -1,5 +1,10 @@
 #!/usr/bin/python3
 #[sft] ultimate compression debate resolver
+#
+#(c) 2013	Michael Enßlin	(michael@ensslin.cc)
+#
+#License: GPLv3 or higher, no warranty, blabla
+
 import os
 import sys
 import ctypes
@@ -37,6 +42,28 @@ if len(sys.argv) != 3:
 
 fromfile=sys.argv[1]
 tofile=sys.argv[2]
+
+#check fromfile and tofile
+#fromfile must be a file
+if not os.path.isfile(fromfile):
+	print("Fromfile " + fromfile + " is not a file")
+	if os.path.isdir(fromfile):
+		print("If you wish to benchmark with the content of a directory, run it through tar -c first.")
+	sys.exit(1)
+
+#tofile must be in a writable directory
+todir = os.path.dirname(tofile)
+if not os.path.isdir(todir):
+	print("Tofile must be in an existing directory")
+	sys.exit(1)
+
+if not os.access(todir, os.W_OK):
+	print("The directory " + todir + " is not writable")
+	sys.exit(1)
+
+if os.path.isfile(tofile) and not os.access(tofile, os.W_OK):
+	print("The file " + tofile + " is not writable")
+	sys.exit(1)
 
 #get size of fromfile
 oldsize = os.path.getsize(fromfile)

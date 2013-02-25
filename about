@@ -1,0 +1,13 @@
+Since this program tests all kinds of compression utilities, it also depends on them.
+
+List of utilities:
+
+compress	(package name is usually 'mcompress')
+gzip
+bzip2
+xz
+lzma
+lzop
+
+Since it is written in python3, it obviously requires python3
+There is also a dependency on pipe viewer (pv), to display progress during benchmark runs
