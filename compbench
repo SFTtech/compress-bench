@@ -9,16 +9,46 @@ import os
 import sys
 import collections
 import argparse
+import sqlite3
 
+class resultcache:
+	def __init__(self, dbfile):
+		#open database connection
+		self.con = sqlite3.connect(dbfile)
+		self.cur = self.con.cursor()
+		#initialize databse
+		self.cur.execute("CREATE TABLE IF NOT EXISTS results (srcfile TEXT, util TEXT, ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP, size INT, ctime REAL, dtime REAL, PRIMARY KEY(srcfile, util))")
+		self.con.commit()
+	
+	def write(self, util, ctime, dtime, size):
+		ctime = str(ctime)
+		dtime = str(dtime)
+		size = str(size)
+		#try to delete (if exists)
+		self.cur.execute("DELETE FROM results WHERE srcfile=? AND util=?", (sourcefile, util))
+		#insert new value
+		self.cur.execute("INSERT INTO results (srcfile, util, size, ctime, dtime) VALUES (?, ?, ?, ?, ?)", (sourcefile, util, size, ctime, dtime))
+		self.con.commit()
+
+	def read(self, util):
+		(date, ctime, dtime, size) = self.cur.execute('SELECT ts, ctime, dtime, size FROM results WHERE srcfile=? AND util=?', (sourcefile, util)).fetchone()
+		return (date, float(ctime), float(dtime), int(size))
+	
 def colprint(msg, colcode):
 	print("\x1b[" + str(colcode) + "m" + msg + "\x1b[m")
 
 def fatal(msg):
 	colprint(msg, 31)
+	print_nonfatals("Nonfatal errors before this error:")
 	sys.exit(1)
 
 #store all non-fatal errors
 nonfatals = []
+def print_nonfatals(msg = "Nonfatal errors"):
+	if len(nonfatals) > 0:
+		print(msg)
+		for nonfatal in nonfatals:
+			print(nonfatal)
 
 def nonfatal(msg):
 	colprint(msg, 33)
@@ -32,15 +62,19 @@ parser = argparse.ArgumentParser(description='Compression utility benchmark')
 parser.add_argument("source", help="this file is used as input for benchmarking, and should contain representative data")
 parser.add_argument("dest", help="compressed data is written here, the file must not exist, but the directory must be writable")
 parser.add_argument("util", help="compression utility that should be benchmarked (may include arguments such as -1). if none are specified, the default utils are used.", nargs='*')
-parser.add_argument("--defaultutils", help="Enforce using the default utils, in addition to the manually specified ones", action="store_true", default=False)
+parser.add_argument("--default-utils", help="Enforce using the default utils, in addition to the manually specified ones", action="store_true", default=False)
 parser.add_argument("--csv", help="Store the tables in .csv files in the current working directory", action="store_true", default=False)
+parser.add_argument("--rerun", help="Do not use previously cached test results", action="store_true", default=False)
+parser.add_argument("--cachefile", help="Specify cache database name", default="compbench_cache.sqlite")
 args = parser.parse_args()
 sourcefile = os.path.abspath(args.source)
 destfile = os.path.abspath(args.dest)
+use_cache = not args.rerun
+cache = resultcache(args.cachefile)
 
 #compose util list
 utils = args.util
-if len(utils) == 0 or args.defaultutils:
+if len(utils) == 0 or args.default_utils:
 	#default utils
 	utils += ["compress", ("zpipe -1", "zpipe -d"), ("zpipe -2", "zpipe -d"), ("zpipe -3", "zpipe -d")]
 	for util in ["lzop", "gzip", "bzip2", "lzma", "xz", "xz -e"]:
@@ -127,11 +161,11 @@ class utilresult:
 
 	#returns most important members as key/value pairs
 	def kvpairs(self):
-		yield("Util", self.util)
-		yield("Percentage", percentage(self.percentage))
-		yield("Compression rate", datarate(self.crate))
-		yield("Decompression rate", datarate(self.drate))
-		yield("Outperformed by", self.outperformedby)
+		yield ("Util", self.util)
+		yield ("Percentage", percentage(self.percentage))
+		yield ("Compression rate", datarate(self.crate))
+		yield ("Decompression rate", datarate(self.drate))
+		yield ("Outperformed by", self.outperformedby)
 
 	def __repr__(self):
 		maxlen = 0
@@ -145,10 +179,6 @@ class utilresult:
 		for k, v in pairs:
 			line += str(k).ljust(maxlen + 2) + str(v) + "\n"
 		return line[:-1]
-
-	#duration for parallel operation with given transmission rate
-	def time_par(self, rate):
-		return max(self.cdmaxtime, self.size / rate)
 
 	#duration for sequential operation with given transmission rate and transmission count
 	def time_seq(self, rate, k):
@@ -204,6 +234,14 @@ def dobench(util, sourcefile, destfile):
 		comp = util
 		decomp = util + " -d"
 	info("Testing " + comp)
+	if use_cache:
+		try:
+			#check for cached results
+			(date, ctime, dtime, size) = cache.read(comp)
+			info("Using cached results from " + date)
+			return utilresult(comp, ctime, dtime, size)
+		except:
+			pass
 	#measure compression times
 	ctime = timecommand("pv '" + sourcefile + "' | " + comp + " > '" + destfile + "'")
 	if ctime != None:
@@ -212,9 +250,12 @@ def dobench(util, sourcefile, destfile):
 		nonfatal("Measurement for util " + comp + " failed")
 		return None
 	else:
+		size = os.path.getsize(destfile)
+		cache.write(comp, ctime, dtime, size)
 		#return the measurement result object
-		return utilresult(comp, ctime, dtime, os.path.getsize(destfile))
+		return utilresult(comp, ctime, dtime, size)
 
+#add dummy result for 'no compression'
 results = [utilresult("cat", 0, 0, oldsize)]
 for r in map(lambda util: dobench(util, sourcefile, destfile), utils):
 	if r == None:
@@ -253,92 +294,45 @@ def list_to_intervals(l):
 			yield (lastpoint, (point + lastpoint)/2, point)
 		lastpoint = point
 
-#for each transmission rate, find the util that is optimal for PARALLEL operation
-#t(rate) = max(t_transmission(rate), cdmaxtime) = max(size/rate, cdmaxtime)
-#when plotting 1/t(rate), we need to find the curve that is highest
-#curves can only switch positions at places where intersections occur, and these occur only between saturated and non-saturated curve parts
-
-#find the util that has the highest compression for rate = 0
-curbestutil = results[0]
-for r in results:
-	if(r.size < curbestutil.size):
-		curbestutil = r
-#we generate a result list that has (rate, best_util) tuples
-bestutil_par = [(0, curbestutil)]
-
-#when plotting the 1/t(rate) curves for all results against rate, we need to find the curve that is highest
-#those curves switch only at places where intersections occur, and only saturated and non-saturated curves can intersect
-#we're lazy, just generate the O(n²) list of possible intersections.
-intersections = []
-for r0 in results:
-	for r1 in results:
-		#possible intersection points are where one of these formula are true
-		#	1/r0.cdmaxtime = rate/r1.size
-		#	1/r1.cdmaxtime = rate/r0.size
-		if r0.cdmaxtime > 0:
-			intersections.append(r1.size/r0.cdmaxtime)
-		if r1.cdmaxtime > 0:
-			intersections.append(r0.size/r1.cdmaxtime)
-
-#we're lazy as fuck, this brute-force algorithm takes O(n³) time, where O(nlogn) would be possible...
-for rate_begin, rate_middle, rate_end in list_to_intervals(intersections):
-	#ignore intersections at negative rates
-	if rate_begin < 0:
-		continue
-
-	oldbestutil = curbestutil
-	curbestutil = results[0]
+#yields (datarate, best util) tuples
+#intersectfun must return a list of (possible) intersections
+#between the time curves of two utilresults
+#timefun must return the time for a given rate
+def getbestutils(intersectfun, timefun):
+	#find the util that has the highest compression (rate = 0)
+	curbest = results[0]
 	for r in results:
-		#check whether r is better than curbestutil
-		if r.time_par(rate_middle) < curbestutil.time_par(rate_middle):
-			curbestutil = r
-	if curbestutil != oldbestutil:
-		bestutil_par.append((rate_begin, curbestutil))
+		if(r.size < curbest.size):
+			curbest = r
+	yield (0, curbest)
 
-#for each transmission rate, find the util that is optimal for SEQUENTIAL operation with k-fold tansmission
-#t(rate, k) = k * t_transmission(rate) + cdtime = k * size/rate + cdtime
-#when plotting t(rate, k), we need to find the curve that is lowest
-
-#find the util that has the highest compression for rate = 0
-curbestutil = results[0]
-for r in results:
-	if(r.size < curbestutil.size):
-		curbestutil = r
-#we generate result lists for different values of k
-bestutil_seq = collections.OrderedDict()
-bestutil_seq_ks = [1, 2, 5]
-for k in bestutil_seq_ks:
-	bestutil_seq[k] = [(0, curbestutil)]
-
-for k in bestutil_seq_ks:
-	#again, the O(n²) intersection algorithm....
 	intersections = []
 	for r0 in results:
 		for r1 in results:
-			cdtimediff = r1.cdtime - r0.cdtime
-			sizediff = r0.size - r1.size
+			inters = intersectfun(r0, r1)
+			if type(inters) == list:
+				intersections += inters
+			else:
+				intersections.append(inters)
 
-			#we only calculate intersections if the times differ by more than 0.01 percent.
-			#else, the intersection would be close to infinity, and thus irrelevant.
-			#(avoiding division by zero errors)
-			if(abs(cdtimediff) > 0.0001 * (r1.cdtime)):
-				intersections.append(k * sizediff / cdtimediff)
-
-	#again, the O(n³) brute-force algorithm
-	curbestutil = bestutil_seq[k][0][1]
-	for rate_begin, rate_middle, rate_end in list_to_intervals(intersections):
-		#ignore negative intersections
-		if rate_begin < 0:
+	#begin is the rate at the beginning of the rate interval,
+	#middle is the rate in the middle of the interval
+	#we do not need the rate at the end.
+	for begin, middle, _ in list_to_intervals(intersections):
+		#ignore intersections at negative rates
+		if begin < 0:
 			continue
 
-		oldbestutil = curbestutil
-		curbestutil = results[0]
+		oldbest = curbest
 		for r in results:
-			#check whether r is better than curbestutil
-			if r.time_seq(rate_middle, k) < curbestutil.time_seq(rate_middle, k):
-				curbestutil = r
-		if curbestutil != oldbestutil:
-			bestutil_seq[k].append((rate_begin, curbestutil))
+			#check whether r is better than curbest in the
+			#given interval
+			if timefun(r, middle) < timefun(curbest, middle):
+				curbest = r
+				
+		#check whether curbest has changed
+		if curbest != oldbest:
+			yield (begin, curbest)
 
 class resulttable:
 	def __init__(self):
@@ -371,13 +365,12 @@ class resulttable:
 		else:
 			return self.data[row][col]
 
-	def getvalstr(self, row, col):
-		if not col in self.cols:
-			width = 0
+	def getvalstr(self, row, col, printnone = "none"):
+		val = self.getval(row, col)
+		if val == None:
+			return printnone
 		else:
-			width = self.cols[col]
-
-		return str(self.getval(row, col)).ljust(width)
+			return str(val)
 
 	def getline(self, source, sep, padding):
 		line = ""
@@ -397,24 +390,30 @@ class resulttable:
 	def getempty(self, sep = " | ", padding = True):
 		return self.getline(lambda x: "", sep, padding)
 
-	def getbody(self, sep = " | ", padding = True):
+	def getbody(self, printnone = "none", sep = " | ", padding = True):
 		body = ""
 		for row in self.rows:
-			body += self.getline(lambda x: self.getvalstr(row, x), sep, padding) + "\n"
+			body += self.getline(lambda x: self.getvalstr(row, x, printnone), sep, padding) + "\n"
 		return body[:-1]
 
-	def print(self, desc):
+	def print(self, desc, printnone="none"):
 		print(desc + "\n")
 		print(self.gettitle())
 		print(self.getempty())
-		print(self.getbody())
+		print(self.getbody(printnone))
 	
 	def to_csv(self, filename):
 		f = open(filename, 'w')
 		f.write(self.gettitle(",") + "\n")
-		f.write(self.getbody(",") + "\n")
+		f.write(self.getbody("", ",") + "\n")
 		f.close()
-
+	
+	def sort(self):
+		newrows = collections.OrderedDict()
+		for r in sorted(self.rows):
+			newrows[r] = self.rows[r]
+		self.rows = newrows
+	
 #create table for measurement results
 goodtable = resulttable()
 badtable = resulttable()
@@ -435,41 +434,71 @@ if args.csv:
 	goodtable.to_csv("utils.csv")
 	badtable.to_csv("utils-outperformed.csv")
 
-#create table for optimal comps for datarates
-table = resulttable()
-#get all datarate intervals
-all_points = bestutil_par
-for k in bestutil_seq_ks:
-	all_points = all_points + bestutil_seq[k]
+#helper functions for find best utils for given datarates
+#these functions find intersections between the time(rate) cuves of two
+#utils r0 and r1.
 
+def intersects_par(r0, r1):
+	#intersections can only occur between saturated and non-saturated
+	#lines.
 
-lastinserted = None
-for begin, middle, end in list_to_intervals(map(lambda x: x[0], all_points)):
-	#get the optimal values for bestutil_par and bestutil_seq[k]
-	def find_matching(l, pos):
-		for k, v in reversed(l):
-			if k <= pos:
-				return v.util
+	#r0.cdmaxtime = r1.size/rate
+	#r1.cdmaxtime = r0.size/rate
+	result = []
+	if r0.cdmaxtime > 0:
+		result.append(r1.size/r0.cdmaxtime)
+	if r1.cdmaxtime > 0:
+		result.append(r0.size/r1.cdmaxtime)
+	return result
 
-	#only insert a new tuple if any of the values have changed, else it would not make sense to add an other row
-	inslist = [("PAR", find_matching(bestutil_par, middle))]
-	inslist += map(lambda k: ("SEQ (" + str(k) + ")", find_matching(bestutil_seq[k], middle)), bestutil_seq_ks)
+def intersects_seq(r0, r1, k):
+	#r0.cdtime + r0.size/rate = r1.cdtime + r1.size/rate
+	cdtimediff = r1.cdtime - r0.cdtime
+	sizediff = r0.size - r1.size
+	#no dividing by zero
+	if cdtimediff != 0:
+		return k * sizediff / cdtimediff
+	else:
+		return []
 
-	if(inslist != lastinserted):
-		table.insval(begin, "Data rate", ">= " + str(datarate(begin)))
-		for k, v in inslist:
-			table.insval(begin, k, v)
-	lastinserted = inslist
+def intersects_dist(r0, r1, k):
+	#r0.ctime + (k + 1) * r0.size/rate + k * r0.dtime =
+	#r1.ctime + (k + 1) * r1.size/rate + k * r1.dtime
+	r0cddtime = r0.ctime + k * r0.dtime
+	r1cddtime = r1.ctime + k * r1.dtime
+	cddtimediff = r1cddtime - r0cddtime
+	sizediff = r0.size - r1.size
+	#no dividing by zero
+	if cddtimediff != 0:
+		return (k + 1) * sizediff / cddtimediff
+	else:
+		return []
+
+#create table of optimal utils for datarates
+optimaltable = resulttable()
+def insoptimalutil(rate, col, util):
+	optimaltable.insval(rate, "Data rate", ">= " + str(datarate(rate)))
+	optimaltable.insval(rate, col, util.util)
+
+for rate, util in getbestutils(intersects_par, lambda r, rate: max(r.cdmaxtime, r.size/rate)):
+	insoptimalutil(rate, "PAR", util)
+
+for k in [1, 2]:
+	for rate, util in getbestutils(lambda r0, r1: intersects_seq(r0, r1, k), lambda r, rate: r.cdtime + k * r.size / rate):
+		insoptimalutil(rate, "SEQ (" + str(k) + ")", util)
+
+for k in [100]:
+	for rate, util in getbestutils(lambda r0, r1: intersects_dist(r0, r1, k), lambda r, rate: r.ctime + (k + 1) * r.size / rate + k * r.dtime):
+		insoptimalutil(rate, "DIST (" + str(k) + ")", util)
 
 #and print it
-table.print("\nBest compression utility depending on transmission speed and mode\n"
-	"PAR:    Compression, Transmission and Decompression occur parallel (e.g. via netcat)\n"
-	"SEQ(k): The file is first compressed, then transmitted k times, then decompressed (e.g. via http)")
+optimaltable.sort()
+optimaltable.print("\nBest compression utility depending on transmission speed and mode\n"
+	"PAR:     Compression, Transmission and Decompression occur parallel (e.g. via netcat)\n"
+	"SEQ(k):  The file is first compressed, then transmitted k times, then decompressed (e.g. via http)\n"
+	"DIST(k): The file is compressed and uploaded, then downloaded and decompressed k times", "")
 if args.csv:
-	table.to_csv("utils-best.csv")
+	optimaltable.to_csv("utils-best.csv")
 
-if len(nonfatals) > 0:
-	print("\nNonfatal errors:")
-	for nonfatal in nonfatals:
-		print(nonfatal)
-
+#print list of nonfatal errors that have occured
+print_nonfatals()
