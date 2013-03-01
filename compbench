@@ -7,9 +7,10 @@
 
 import os
 import sys
-import collections
 import argparse
 import sqlite3
+
+from util import colprint, fatal, print_nonfatals, nonfatal, info, run_command, resulttable
 
 class resultcache:
 	def __init__(self, dbfile):
@@ -25,38 +26,15 @@ class resultcache:
 		dtime = str(dtime)
 		size = str(size)
 		#try to delete (if exists)
-		self.cur.execute("DELETE FROM results WHERE srcfile=? AND util=?", (sourcefile, util))
+		self.cur.execute("DELETE FROM results WHERE srcfile=? AND util=?", (srcfile, util))
 		#insert new value
-		self.cur.execute("INSERT INTO results (srcfile, util, size, ctime, dtime) VALUES (?, ?, ?, ?, ?)", (sourcefile, util, size, ctime, dtime))
+		self.cur.execute("INSERT INTO results (srcfile, util, size, ctime, dtime) VALUES (?, ?, ?, ?, ?)", (srcfile, util, size, ctime, dtime))
 		self.con.commit()
 
 	def read(self, util):
-		(date, ctime, dtime, size) = self.cur.execute('SELECT ts, ctime, dtime, size FROM results WHERE srcfile=? AND util=?', (sourcefile, util)).fetchone()
+		(date, ctime, dtime, size) = self.cur.execute('SELECT ts, ctime, dtime, size FROM results WHERE srcfile=? AND util=?', (srcfile, util)).fetchone()
 		return (date, float(ctime), float(dtime), int(size))
 	
-def colprint(msg, colcode):
-	print("\x1b[" + str(colcode) + "m" + msg + "\x1b[m")
-
-def fatal(msg):
-	colprint(msg, 31)
-	print_nonfatals("Nonfatal errors before this error:")
-	sys.exit(1)
-
-#store all non-fatal errors
-nonfatals = []
-def print_nonfatals(msg = "Nonfatal errors"):
-	if len(nonfatals) > 0:
-		print(msg)
-		for nonfatal in nonfatals:
-			print(nonfatal)
-
-def nonfatal(msg):
-	colprint(msg, 33)
-	nonfatals.append(msg)
-
-def info(msg):
-	colprint(msg, 36)
-
 #parse argv
 parser = argparse.ArgumentParser(description='Compression utility benchmark')
 parser.add_argument("source", help="this file is used as input for benchmarking, and should contain representative data")
@@ -67,7 +45,7 @@ parser.add_argument("--csv", help="Store the tables in .csv files in the current
 parser.add_argument("--rerun", help="Do not use previously cached test results", action="store_true", default=False)
 parser.add_argument("--cachefile", help="Specify cache database name", default="compbench_cache.sqlite")
 args = parser.parse_args()
-sourcefile = os.path.abspath(args.source)
+srcfile = os.path.abspath(args.source)
 destfile = os.path.abspath(args.dest)
 use_cache = not args.rerun
 cache = resultcache(args.cachefile)
@@ -81,11 +59,11 @@ if len(utils) == 0 or args.default_utils:
 		for x in range(1, 10):
 			utils.append(util + " -" + str(x))
 
-#sourcefile must be a file
-if not os.path.isfile(sourcefile):
-	if os.path.isdir(sourcefile):
+#srcfile must be a file
+if not os.path.isfile(srcfile):
+	if os.path.isdir(srcfile):
 		print("If you wish to benchmark with the content of a directory, run it through tar -c first.")
-	fatal(sourcefile + " is not a file")
+	fatal(srcfile + " is not a file")
 
 #destfile must be in a writable directory
 destdir = os.path.dirname(destfile)
@@ -98,8 +76,8 @@ if not os.access(destdir, os.W_OK):
 if os.path.isfile(destfile) and not os.access(destfile, os.W_OK):
 	fatal(destfile + " is not writable")
 
-#get size of sourcefile
-oldsize = os.path.getsize(sourcefile)
+#get size of srcfile
+oldsize = os.path.getsize(srcfile)
 if oldsize == 0:
 	fatal("Source file must be non-zero sized")
 
@@ -191,42 +169,7 @@ class utilresult:
 		else:
 			return False
 			
-#monotonic clock code
-import ctypes
-__all__ = ["monotonic_time"]
-CLOCK_MONOTONIC = 1 # see <linux/time.h>
-class timespec(ctypes.Structure):
-    _fields_ = [
-        ('tv_sec', ctypes.c_long),
-        ('tv_nsec', ctypes.c_long)
-    ]
-
-librt = ctypes.CDLL('librt.so.1', use_errno=True)
-clock_gettime = librt.clock_gettime
-clock_gettime.argtypes = [ctypes.c_int, ctypes.POINTER(timespec)]
-
-#returns monotonic time, as float, in seconds
-def monotonic_time():
-    t = timespec()
-    if clock_gettime(CLOCK_MONOTONIC, ctypes.pointer(t)) != 0:
-        errno_ = ctypes.get_errno()
-        raise OSError(errno_, os.strerror(errno_))
-    return t.tv_sec + t.tv_nsec * 1e-9
-
-#returns runtime of command, as float, in seconds
-def timecommand(command):
-	print(command)
-	t_begin = monotonic_time()
-	exitcode = os.system(command)
-	t_end = monotonic_time()
-
-	if exitcode == 0:
-		return t_end - t_begin
-	else:
-		nonfatal("command \"" + command + "\" failed")
-		return None
-
-def dobench(util, sourcefile, destfile):
+def dobench(util, srcfile, destfile):
 	if type(util) == tuple:
 		comp = util[0]
 		decomp = util[1]
@@ -243,9 +186,9 @@ def dobench(util, sourcefile, destfile):
 		except:
 			pass
 	#measure compression times
-	ctime = timecommand("pv '" + sourcefile + "' | " + comp + " > '" + destfile + "'")
+	ctime = run_command("pv '" + srcfile + "' | " + comp + " > '" + destfile + "'")
 	if ctime != None:
-		dtime = timecommand("pv '" + destfile + "' | " + decomp + " > /dev/null")
+		dtime = run_command("pv '" + destfile + "' | " + decomp + " > /dev/null")
 	if ctime == None or dtime == None:
 		nonfatal("Measurement for util " + comp + " failed")
 		return None
@@ -257,7 +200,7 @@ def dobench(util, sourcefile, destfile):
 
 #add dummy result for 'no compression'
 results = [utilresult("cat", 0, 0, oldsize)]
-for r in map(lambda util: dobench(util, sourcefile, destfile), utils):
+for r in map(lambda util: dobench(util, srcfile, destfile), utils):
 	if r == None:
 		continue
 
@@ -334,105 +277,25 @@ def getbestutils(intersectfun, timefun):
 		if curbest != oldbest:
 			yield (begin, curbest)
 
-class resulttable:
-	def __init__(self):
-		self.data = {}
-		self.rows = collections.OrderedDict()
-		self.cols = collections.OrderedDict()
-
-	def insval(self, row, col, v):
-		if v == None:
-			return
-
-		#update column and row indices with their maximum field size values
-		if not row in self.rows:
-			self.rows[row] = max(len(str(row)), len(str(v)))
-			self.data[row] = collections.OrderedDict()
-		else:
-			self.rows[row] = max(self.rows[row], len(str(v)))
-
-		if not col in self.cols:
-			self.cols[col] = max(len(str(col)), len(str(v)))
-		else:
-			self.cols[col] = max(self.cols[col], len(str(v)))
-
-		#store the value
-		self.data[row][col] = v
-
-	def getval(self, row, col):
-		if not row in self.rows or not col in self.data[row]:
-			return None
-		else:
-			return self.data[row][col]
-
-	def getvalstr(self, row, col, printnone = "none"):
-		val = self.getval(row, col)
-		if val == None:
-			return printnone
-		else:
-			return str(val)
-
-	def getline(self, source, sep, padding):
-		line = ""
-		for col in self.cols:
-			data = str(source(col))
-			if padding:
-				line += data.ljust(self.cols[col])
-			else:
-				line += data
-			line += sep
-
-		return line[:-len(sep)]
-
-	def gettitle(self, sep = " | ", padding = True):
-		return self.getline(lambda x: x, sep, padding)
-
-	def getempty(self, sep = " | ", padding = True):
-		return self.getline(lambda x: "", sep, padding)
-
-	def getbody(self, printnone = "none", sep = " | ", padding = True):
-		body = ""
-		for row in self.rows:
-			body += self.getline(lambda x: self.getvalstr(row, x, printnone), sep, padding) + "\n"
-		return body[:-1]
-
-	def print(self, desc, printnone="none"):
-		print(desc + "\n")
-		print(self.gettitle())
-		print(self.getempty())
-		print(self.getbody(printnone))
-	
-	def to_csv(self, filename):
-		f = open(filename, 'w')
-		f.write(self.gettitle(",") + "\n")
-		f.write(self.getbody("", ",") + "\n")
-		f.close()
-	
-	def sort(self):
-		newrows = collections.OrderedDict()
-		for r in sorted(self.rows):
-			newrows[r] = self.rows[r]
-		self.rows = newrows
-	
 #create table for measurement results
-goodtable = resulttable()
-badtable = resulttable()
+utilresults = resulttable()
+utilresults_outperformed = resulttable()
 for r in results:
 	if(r.outperformedby == None):
-		table = goodtable
+		table = utilresults
 	else:
-		table = badtable
+		table = utilresults_outperformed
 	#insert r into the table
 	for k, v in r.kvpairs():
 		table.insval(r.util, k, v)
 #and print it
-goodtable.print("\n\nMeasurement results for compression utilities")
-if len(badtable.rows) > 0:
-	badtable.print("\nCompression utilities that are worse than some other in all aspects, i.e. completely useless for this workload")
+utilresults.print("\n\nMeasurement results for compression utilities")
+if len(utilresults_outperformed.rows) > 0:
+	utilresults_outperformed.print("\nCompression utilities that are worse than some other in all aspects, i.e. completely useless for this workload")
 
 if args.csv:
-	goodtable.to_csv("utils.csv")
-	badtable.to_csv("utils-outperformed.csv")
+	utilresults.to_csv("utils.csv")
+	utilresults_outperformed.to_csv("utils-outperformed.csv")
 
 #helper functions for find best utils for given datarates
 #these functions find intersections between the time(rate) cuves of two
@@ -475,10 +338,10 @@ def intersects_dist(r0, r1, k):
 		return []
 
 #create table of optimal utils for datarates
-optimaltable = resulttable()
+optimal_utils = resulttable()
 def insoptimalutil(rate, col, util):
-	optimaltable.insval(rate, "Data rate", ">= " + str(datarate(rate)))
-	optimaltable.insval(rate, col, util.util)
+	optimal_utils.insval(rate, "Data rate", ">= " + str(datarate(rate)))
+	optimal_utils.insval(rate, col, util.util)
 
 for rate, util in getbestutils(intersects_par, lambda r, rate: max(r.cdmaxtime, r.size/rate)):
 	insoptimalutil(rate, "PAR", util)
@@ -492,13 +355,13 @@ for k in [100]:
 		insoptimalutil(rate, "DIST (" + str(k) + ")", util)
 
 #and print it
-optimaltable.sort()
-optimaltable.print("\nBest compression utility depending on transmission speed and mode\n"
+optimal_utils.sort()
+optimal_utils.print("\nBest compression utility depending on transmission speed and mode\n"
 	"PAR:     Compression, Transmission and Decompression occur parallel (e.g. via netcat)\n"
 	"SEQ(k):  The file is first compressed, then transmitted k times, then decompressed (e.g. via http)\n"
 	"DIST(k): The file is compressed and uploaded, then downloaded and decompressed k times", "")
 if args.csv:
-	optimaltable.to_csv("utils-best.csv")
+	optimal_utils.to_csv("utils-best.csv")
 
 #print list of nonfatal errors that have occured
 print_nonfatals()
